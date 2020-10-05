@@ -13,16 +13,16 @@ config = configparser.ConfigParser()
 config.read(sys.argv[1])
 aws_key_id = config['myconfig']['aws_access_key_id']
 aws_secret_key = config['myconfig']['aws_secret_access_key']
-bootstrap_server = config['myconfig']['bootstrap_servers']
-bucket = config['myconfig']['bucket']
+#bootstrap_server = config['myconfig']['bootstrap_servers']
+#bucket = config['myconfig']['bucket']
 
 i = 0
 #logger = logging.getLogger('testdata')
 s3 = boto3.client('s3', aws_access_key_id= aws_key_id, aws_secret_access_key= aws_secret_key) 
 
-producer = kafka.KafkaProducer(bootstrap_servers=bootstrap_server)
+producer = kafka.KafkaProducer(bootstrap_servers='ip-10-0-0-10.us-west-2.compute.internal:9092')
 while True:
-	obj = s3.get_object(Bucket=bucket, Key=sys.argv[1])
+	obj = s3.get_object(Bucket='yuanzhou-log-dataset', Key=sys.argv[1])
 	body = obj['Body']
 	for ln in codecs.getreader('utf-8')(body):
 		producer.send('log-entry', 

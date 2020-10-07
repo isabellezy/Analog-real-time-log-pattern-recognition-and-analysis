@@ -20,9 +20,13 @@ import org.apache.flink.connector.jdbc.JdbcConnectionOptions;
 import org.apache.flink.connector.jdbc.JdbcSink;
 import java.util.Properties;
 import java.io.FileInputStream;
-
+import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
+import org.apache.flink.api.common.functions.ReduceFunction;
+import org.apache.flink.streaming.api.TimeCharacteristic;
+import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.slf4j.LoggerFactory;
 import org.slf4j.Logger;
+import java.time.Duration;
 
 public class MatcherJob {
     static Logger LOG = LoggerFactory.getLogger(MatcherJob.class);
@@ -39,7 +43,7 @@ public class MatcherJob {
         String consumerGroup = prop.getProperty("matcherconsumerGroup");
         
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-        // env.setParallelism(100);
+        env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
         
         Properties properties = new Properties();
         properties.setProperty("bootstrap.servers", kafkaAddress);
@@ -47,6 +51,8 @@ public class MatcherJob {
         
         FlinkKafkaConsumer<ObjectNode> flinkKafkaConsumer = new FlinkKafkaConsumer<>(inputTopic, new JSONKeyValueDeserializationSchema(false), properties); 
         //FlinkKafkaProducer<String> flinkKafkaProducer = new FlinkKafkaProducer<>(outputTopic, new SimpleStringSchema(), properties);
+        flinkKafkaConsumer.assignTimestampsAndWatermarks(
+            WatermarkStrategy.forBoundedOutOfOrderness(Duration.ofSeconds(1)));
         
         DataStream<ObjectNode> stream = env.addSource(flinkKafkaConsumer);
         
@@ -64,7 +70,23 @@ public class MatcherJob {
   
         //logStream.flatMap(new PatternMatcher()).keyBy(value -> value.f0).timeWindow(Time.milliseconds(100)).sum(1).print();//.addSink(flinkKafkaProducer);
         DataStream<Tuple3<Double, String, Integer>> tuplestream = logStream.flatMap(new PatternMatcher(prop));
-        writeStreamToDB(tuplestream, prop);
+        String query = "INSERT INTO pattern (time, pattern, occurrence) VALUES (?, ?, ?);";
+        writeStreamToDB(tuplestream, prop, query);
+        
+        DataStream<Tuple3<Double, String, Integer>> grafanastream = tuplestream
+            .keyBy(value -> value.f1)
+            .timeWindow(Time.seconds(1))
+            .reduce(new ReduceFunction<Tuple3<Double, String, Integer>>() {
+                @Override
+                public Tuple3<Double, String, Integer> reduce(Tuple3<Double, String, Integer> value1, Tuple3<Double, String, Integer> value2)
+                throws Exception {
+                    
+                    return new Tuple3(value1.f0, value1.f1, value1.f2 + value2.f2);
+                }
+            });
+         
+        String grafanaQuery = "INSERT INTO GRAFANAPATTERN (time, pattern, occurrence) VALUES (?, ?, ?);";
+        writeStreamToDB(grafanastream, prop, grafanaQuery);
         /*System.out.println("start plan");
         System.out.println(env.getExecutionPlan());
         System.out.println("end plan");*/
@@ -74,9 +96,8 @@ public class MatcherJob {
     }
     
 
-    
-    public static void writeStreamToDB(DataStream<Tuple3<Double, String, Integer>> logStream, Properties prop) {
-        String query = "INSERT INTO pattern (time, pattern, occurrence) VALUES (?, ?, ?);";
+    public static void writeStreamToDB(DataStream<Tuple3<Double, String, Integer>> logStream, Properties prop, String query) {
+        
         JDBCOutputFormat jdbcOutput = JDBCOutputFormat.buildJDBCOutputFormat()
             .setDrivername(prop.getProperty("drivername"))
             .setDBUrl(prop.getProperty("dburl"))

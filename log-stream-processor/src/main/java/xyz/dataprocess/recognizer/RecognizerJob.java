@@ -41,7 +41,8 @@ import java.io.FileInputStream;
 
 public class RecognizerJob {
     static Logger LOG = LoggerFactory.getLogger(RecognizerJob.class);
-    static final int PATTERN_MIN_OCCURRENCE = 1000;
+    private static int patternMinOccurrence;
+    private static int topKnum;
     private static final OutputTag<Tuple2<String, Integer>> freqPatternTag = new OutputTag<Tuple2<String, Integer>>("side-output") {};
     //private static final String s3SinkPath = "s3a://ka-app-<username>/data";
 
@@ -55,7 +56,10 @@ public class RecognizerJob {
         String kafkaAddress = prop.getProperty("kafkaAddress");
         String inputTopic = prop.getProperty("inputTopic");
         String consumerGroup = prop.getProperty("recognizerconsumerGroup");
-        
+        patternMinOccurrence = Integer.parseInt(prop.getProperty("patternMinOccurrence"));
+        //LOG.info("Min Occurrence: "+ PATTERN_MIN_OCCURRENCE);
+        topKnum = Integer.parseInt(prop.getProperty("topKnum"));
+        //LOG.info("Top K num" + topKnum);
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
         
@@ -109,7 +113,7 @@ public class RecognizerJob {
         while ( patternlen <= 10 ) {
             SingleOutputStreamOperator<Tuple2<String, String>> outputStream  = patternStream
                 .keyBy(value -> value.f0)
-                .timeWindow(Time.seconds(15))
+                .timeWindow(Time.seconds(60))
                 .process(new FindAndExpandPatterns());
             DataStream<Tuple2<String, Integer>> sideStream = outputStream.getSideOutput(freqPatternTag);
             //sideStream.timeWindow(Time.seconds(15))
@@ -126,7 +130,8 @@ public class RecognizerJob {
   
         }
         //combined.print();
-        DataStream<Row> rankedRow = combined.timeWindowAll(Time.seconds(15)).apply(new AllWindowFunction<Tuple2<String,Integer>, Row, TimeWindow>() {
+        DataStream<Row> rankedRow = combined.timeWindowAll(Time.seconds(60)).apply(new AllWindowFunction<Tuple2<String,Integer>, Row, TimeWindow>() {
+            private int topKnum = RecognizerJob.topKnum;
             public void apply (TimeWindow window,
                     Iterable<Tuple2<String, Integer>> values,
                     Collector<Row> out) throws Exception {
@@ -135,12 +140,16 @@ public class RecognizerJob {
                     int numTokens = v.f0.split(" +").length;
                     valuelist.add(new Tuple3<String, Integer, Double>(v.f0, v.f1, v.f1 * Math.pow(2, numTokens)));
                 }
+                ////////
+                System.out.printf("rank function called. Entries: %d\n", valuelist.size());
                 
                 Collections.sort(valuelist, (a, b) -> {
                      return b.f2.compareTo(a.f2);
                 });
                 
-                int min = Math.min(valuelist.size(), 20);
+                int min = Math.min(valuelist.size(), topKnum);
+                ////////
+               // System.out.printf("topKnum: %d min: %d\n", topKnum, min);
               // return top 20 patterns
                 for(int i = 0; i < min; i++) {
                     Row row = new Row(4); 
@@ -169,7 +178,7 @@ public class RecognizerJob {
         assert(jdbcOutput != null);
         
         rankedRow.writeUsingOutputFormat(jdbcOutput);
-        //rankedStream.print();
+
         //rankedStream.addSink(new createS3Sink());
     
         env.execute("");
@@ -177,6 +186,7 @@ public class RecognizerJob {
     
     static class FindAndExpandPatterns extends ProcessWindowFunction<
         Tuple2<String, String>, Tuple2<String, String>, String, TimeWindow> {
+        int patternMinOccurrence = RecognizerJob.patternMinOccurrence;
         @Override
         public void process(String pattern,
                             Context ctx,
@@ -185,7 +195,7 @@ public class RecognizerJob {
             // LOG.info("New window received, pattern {}", pattern);
             List<Tuple2<String, String>> stagedValues = new ArrayList<>();
             values.forEach(stagedValues::add);
-            if (stagedValues.size() < PATTERN_MIN_OCCURRENCE) {
+            if (stagedValues.size() < patternMinOccurrence) {
                 return;
             }
             //LOG.info("pattern: {}, frequency: {}", pattern, stagedValues.size());

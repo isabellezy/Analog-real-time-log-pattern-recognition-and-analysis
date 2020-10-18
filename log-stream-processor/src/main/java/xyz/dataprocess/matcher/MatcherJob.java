@@ -71,7 +71,8 @@ public class MatcherJob {
         //logStream.flatMap(new PatternMatcher()).keyBy(value -> value.f0).timeWindow(Time.milliseconds(100)).sum(1).print();//.addSink(flinkKafkaProducer);
         DataStream<Tuple3<Double, String, Integer>> tuplestream = logStream.flatMap(new PatternMatcher(prop));
         String query = "INSERT INTO pattern (time, pattern, occurrence) VALUES (?, ?, ?);";
-        writeStreamToDB(tuplestream, prop, query);
+        int patternBatchSize = Integer.parseInt(prop.getProperty("patternBatchSize"));   // set batchsize to determine batching how many patterns to write to database;
+        writeStreamToDB(tuplestream, prop, query, patternBatchSize);
         
         DataStream<Tuple3<Double, String, Integer>> grafanastream = tuplestream
             .keyBy(value -> value.f1)
@@ -84,9 +85,10 @@ public class MatcherJob {
                     return new Tuple3(value1.f0, value1.f1, value1.f2 + value2.f2);
                 }
             });
-         
+        
         String grafanaQuery = "INSERT INTO GRAFANAPATTERN (time, pattern, occurrence) VALUES (?, ?, ?);";
-        writeStreamToDB(grafanastream, prop, grafanaQuery);
+        int grafanaBatchSize = Integer.parseInt(prop.getProperty("grafanaBatchSize"));
+        writeStreamToDB(grafanastream, prop, grafanaQuery, grafanaBatchSize);
         /*System.out.println("start plan");
         System.out.println(env.getExecutionPlan());
         System.out.println("end plan");*/
@@ -96,7 +98,7 @@ public class MatcherJob {
     }
     
 
-    public static void writeStreamToDB(DataStream<Tuple3<Double, String, Integer>> logStream, Properties prop, String query) {
+    public static void writeStreamToDB(DataStream<Tuple3<Double, String, Integer>> logStream, Properties prop, String query, int batchSize) {
         
         JDBCOutputFormat jdbcOutput = JDBCOutputFormat.buildJDBCOutputFormat()
             .setDrivername(prop.getProperty("drivername"))
@@ -105,7 +107,7 @@ public class MatcherJob {
             .setPassword(prop.getProperty("dbpassword"))
             .setQuery(query)
             .setSqlTypes(new int[] { Types.TIMESTAMP, Types.VARCHAR, Types.INTEGER})
-            .setBatchInterval(100)
+            .setBatchInterval(batchSize)
             .finish();
         assert(jdbcOutput != null);
         DataStream<Row> rows = logStream.map((MapFunction<Tuple3<Double, String, Integer>, Row>) aTuple -> {

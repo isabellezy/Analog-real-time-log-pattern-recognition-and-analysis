@@ -3,7 +3,7 @@ package xyz.dataprocess.matcher;
 import java.util.*;
 import java.util.stream.Collectors;
 
-import org.apache.flink.api.common.functions.FlatMapFunction;
+import org.apache.flink.api.common.functions.RichFlatMapFunction;
 import org.apache.flink.util.Collector;
 import org.apache.flink.api.java.tuple.Tuple3;
 
@@ -31,17 +31,21 @@ import java.util.regex.Pattern;
 import java.util.regex.Matcher;
 import java.util.Properties;
 
-public class PatternMatcher implements FlatMapFunction<LogEntry, Tuple3<Double, String, Integer>> {
+public class PatternMatcher extends RichFlatMapFunction<LogEntry, Tuple3<Double, String, Integer>> {
     //String[] patternlist = {"BLOCK* NameSystem.addStoredBlock", "Received block"};
     private ArrayList<String> patternlist;
     static Logger LOG = LoggerFactory.getLogger(PatternMatcher.class);
-    private Properties prop;
+    private String url;
+    private String user;
+    private String password;
+    private int topKnum;
+
     private class MyReloadThread extends Thread {
          public void run() {
             try {
                 while (true) {
                     Thread.sleep(15000);
-                    loadPatternsFromDB(prop);
+                    loadPatternsFromDB();
                 }
             } catch (java.lang.InterruptedException e) {
                 return;
@@ -50,9 +54,17 @@ public class PatternMatcher implements FlatMapFunction<LogEntry, Tuple3<Double, 
     }
     
     public PatternMatcher(Properties prop) {
-        this.prop = prop;
-        loadPatternsFromDB(prop);
+        this.url = prop.getProperty("dburl");
+        this.user = prop.getProperty("dbusername");
+        this.password = prop.getProperty("dbpassword");
+        this.topKnum = Integer.parseInt(prop.getProperty("topKnum"));
+    }
+    
+    @Override
+    public void open(org.apache.flink.configuration.Configuration conf) throws Exception {
+        loadPatternsFromDB();
         new MyReloadThread().start();
+        super.open(conf);
     }
     
     @Override
@@ -66,32 +78,33 @@ public class PatternMatcher implements FlatMapFunction<LogEntry, Tuple3<Double, 
         
 
         for (String  pattern : patternlistCopy) {
-            
             if (logEntry.log.contains(pattern)) {
+
                 out.collect(new Tuple3<>(logEntry.timestamp, pattern, 1));
             }
         }
    }
    
-   private void loadPatternsFromDB(Properties prop) {
-        String url = prop.getProperty("dburl");
-        String user = prop.getProperty("dbusername");
-        String password = prop.getProperty("dbpassword");
-
-        try (Connection con = DriverManager.getConnection(url, user, password);
-            PreparedStatement pst = con.prepareStatement("SELECT DISTINCT PATTERN FROM (SELECT PATTERN FROM RANKEDPATTERN ORDER BY TIME DESC LIMIT 40) AS T");
-            ResultSet rs = pst.executeQuery()) {
+   private void loadPatternsFromDB() {
+        try {
+            Connection con = DriverManager.getConnection(url, user, password);
+            PreparedStatement pst = con.prepareStatement("SELECT DISTINCT PATTERN FROM (SELECT PATTERN FROM RANKEDPATTERN ORDER BY TIME DESC LIMIT ?) AS T");
+            pst.setInt(1, 2 * topKnum);
+            ResultSet rs = pst.executeQuery();
             ArrayList<String> newPatternList = new ArrayList<>();
             
             while (rs.next()) {
                 newPatternList.add(rs.getString(1));
             }
+            pst.close();
+            con.close();
 
             synchronized (this) {
                 patternlist = newPatternList;
             
                 
             }
+            
             LOG.info("Patterns loaded from database.");
         } catch (SQLException e) {
             System.err.println(e.getMessage());

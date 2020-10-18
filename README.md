@@ -55,4 +55,4 @@ After building you can setup Flink on AWS instances and run the following comman
 Then you can start both matcher job and recognizer job. 
 
 Data Visualization is a real-time visualizaiton on matched patterns and their occurrences. this component is also built by Maven. 
-After building you can run this commond: `java -cp loganalyzer/log-pattern-visualization/target/visualization-0.0.1-SNAPSHOT-jar-with-dependencies.jar xyz.dataprocess.visualization.ConsoleVisualization`  
+After building you can run this commond: `java -cp loganalyzer/log-pattern-visualization/target/visualization-0.0.1-SNAPSHOT-jar-with-dependencies.jar xyz.dataprocess.visualization.ConsoleVisualization`
